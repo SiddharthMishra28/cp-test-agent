@@ -1,0 +1,118 @@
+# GitLab CI template for Azure Data Factory + ADLS Gen2 automation.
+#
+# Beginner quick start:
+# 1) In GitLab, open: Settings -> CI/CD -> Variables
+# 2) Add the required variables marked "REQUIRED" below.
+# 3) Run pipeline manually and choose one of the manual jobs:
+#    - print_adf_token         (debug token retrieval)
+#    - trigger_adf_pipeline    (start a specific ADF pipeline)
+#    - print_adls_token        (debug ADLS token retrieval)
+#    - read_adls_file          (read and print ADLS file contents)
+#
+# Security notes:
+# - Store secrets as masked/protected GitLab CI variables.
+# - Never hard-code secrets in this file.
+# - Token values are never printed in full.
+
+stages:
+  - validate
+  - auth
+  - run
+
+default:
+  image: alpine:3.20
+  before_script:
+    - apk add --no-cache bash curl python3
+    - chmod +x scripts/azure_helpers.sh
+    - source scripts/azure_helpers.sh
+
+# ------------------------------
+# Global configuration variables
+# ------------------------------
+variables:
+  # REQUIRED: Azure service principal / app registration details.
+  AZURE_TENANT_ID: ""
+  AZURE_CLIENT_ID: ""
+  AZURE_CLIENT_SECRET: ""
+
+  # REQUIRED for ADF operations.
+  AZURE_SUBSCRIPTION_ID: ""
+  ADF_RESOURCE_GROUP: ""
+  ADF_FACTORY_NAME: ""
+  ADF_PIPELINE_NAME: ""
+
+  # Optional JSON payload for ADF pipeline parameters.
+  # Example: {"RunDate":"2026-01-01","Force":true}
+  ADF_PIPELINE_PARAMETERS_JSON: "{}"
+
+  # Optional API scope/version overrides.
+  ADF_MANAGEMENT_SCOPE: "https://management.azure.com/.default"
+  ADF_API_VERSION: "2018-06-01"
+
+  # REQUIRED for ADLS read operations.
+  ADLS_ACCOUNT_NAME: ""
+  ADLS_FILE_SYSTEM: ""
+  ADLS_FILE_PATH: ""
+
+  # Optional ADLS configuration.
+  ADLS_STORAGE_SCOPE: "https://storage.azure.com/.default"
+  ADLS_API_VERSION: "2023-11-03"
+  ADLS_TIMEOUT_SECONDS: "120"
+
+validate_required_script_files:
+  stage: validate
+  script:
+    - test -f scripts/azure_helpers.sh
+    - bash -n scripts/azure_helpers.sh
+    - echo "Validation passed: helper script exists and is shell-valid."
+
+print_adf_token:
+  stage: auth
+  when: manual
+  allow_failure: false
+  script:
+    - token=$(get_adf_management_token)
+    - echo "ADF token acquired. Prefix: ${token:0:20}..."
+
+trigger_adf_pipeline:
+  stage: run
+  when: manual
+  allow_failure: false
+  script:
+    - token=$(get_adf_management_token)
+    - response=$(trigger_adf_pipeline "$token")
+    - echo "Pipeline trigger response:"
+    - echo "$response"
+    - |
+      python3 - <<'PY' "$response"
+      import json,sys
+      try:
+          payload=json.loads(sys.argv[1])
+      except Exception:
+          print("NOTE: Response was not valid JSON.")
+          raise SystemExit(0)
+      run_id=payload.get("runId")
+      if run_id:
+          print(f"Triggered runId: {run_id}")
+      else:
+          print("Triggered pipeline but runId was not found in response.")
+      PY
+
+print_adls_token:
+  stage: auth
+  when: manual
+  allow_failure: false
+  script:
+    - token=$(get_adls_storage_token)
+    - echo "ADLS token acquired. Prefix: ${token:0:20}..."
+
+read_adls_file:
+  stage: run
+  when: manual
+  allow_failure: false
+  script:
+    - token=$(get_adls_storage_token)
+    - echo "----- Begin ADLS File Output -----"
+    - read_adls_file_to_console "$token"
+    - echo
+    - echo "----- End ADLS File Output -----"
